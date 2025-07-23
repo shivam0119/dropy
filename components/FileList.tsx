@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Folder, Star, Trash, X, ExternalLink } from "lucide-react";
+import {  Trash, X } from "lucide-react";
 import {
   Table,
   TableHeader,
@@ -11,7 +11,7 @@ import {
   TableCell,
 } from "@heroui/table";
 import { Divider } from "@heroui/divider";
-import { Tooltip } from "@nextui-org/react";
+
 import { Card } from "@heroui/card";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
@@ -173,7 +173,7 @@ export default function FileList({
   };
 
   const handleDownloadBulk = async () => {
-    for (let file of files.filter((f) => selectedFileIds.includes(f.id))) {
+    for (const file of files.filter((f) => selectedFileIds.includes(f.id))) {
       await handleDownload(file);
     }
     setSelectedFileIds([]);
