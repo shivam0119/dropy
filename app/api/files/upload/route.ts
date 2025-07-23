@@ -21,20 +21,18 @@ export async function POST(request: NextRequest) {
     }
 
     const formData = await request.formData();
-    const file = formData.get("file") as File;
+    const filesList = formData.getAll("file") as File[];
     const formUserId = formData.get("userId") as string;
     const parentId = (formData.get("parentId") as string) || null;
 
-    // Verify the user is uploading to their own account
     if (formUserId !== userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    if (filesList.length === 0) {
+      return NextResponse.json({ error: "No files provided" }, { status: 400 });
     }
 
-    // Check if parent folder exists if parentId is provided
     if (parentId) {
       const [parentFolder] = await db
         .select()
@@ -55,54 +53,54 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Only allow image uploads
-    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
-      return NextResponse.json(
-        { error: "Only image files are supported" },
-        { status: 400 }
-      );
+    const uploadedFiles = [];
+
+    for (const file of filesList) {
+      if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+        continue; // skip unsupported files
+      }
+
+      const buffer = await file.arrayBuffer();
+      const fileBuffer = Buffer.from(buffer);
+
+      const originalFilename = file.name;
+      const fileExtension = originalFilename.split(".").pop() || "";
+      const uniqueFilename = `${uuidv4()}.${fileExtension}`;
+
+      const folderPath = parentId
+        ? `/droply/${userId}/folders/${parentId}`
+        : `/droply/${userId}`;
+
+      const uploadResponse = await imagekit.upload({
+        file: fileBuffer,
+        fileName: uniqueFilename,
+        folder: folderPath,
+        useUniqueFileName: false,
+      });
+
+      const fileData = {
+        name: originalFilename,
+        path: uploadResponse.filePath,
+        size: file.size,
+        type: file.type,
+        fileUrl: uploadResponse.url,
+        thumbnailUrl: uploadResponse.thumbnailUrl || null,
+        userId: userId,
+        parentId: parentId,
+        isFolder: false,
+        isStarred: false,
+        isTrash: false,
+      };
+
+      const [newFile] = await db.insert(files).values(fileData).returning();
+      uploadedFiles.push(newFile);
     }
 
-    const buffer = await file.arrayBuffer();
-    const fileBuffer = Buffer.from(buffer);
-
-    const originalFilename = file.name;
-    const fileExtension = originalFilename.split(".").pop() || "";
-    const uniqueFilename = `${uuidv4()}.${fileExtension}`;
-
-    // Create folder path based on parent folder if exists
-    const folderPath = parentId
-      ? `/droply/${userId}/folders/${parentId}`
-      : `/droply/${userId}`;
-
-    const uploadResponse = await imagekit.upload({
-      file: fileBuffer,
-      fileName: uniqueFilename,
-      folder: folderPath,
-      useUniqueFileName: false,
-    });
-
-    const fileData = {
-      name: originalFilename,
-      path: uploadResponse.filePath,
-      size: file.size,
-      type: file.type,
-      fileUrl: uploadResponse.url,
-      thumbnailUrl: uploadResponse.thumbnailUrl || null,
-      userId: userId,
-      parentId: parentId,
-      isFolder: false,
-      isStarred: false,
-      isTrash: false,
-    };
-
-    const [newFile] = await db.insert(files).values(fileData).returning();
-
-    return NextResponse.json(newFile);
+    return NextResponse.json({ files: uploadedFiles });
   } catch (error) {
     console.error("Error uploading file:", error);
     return NextResponse.json(
-      { error: "Failed to upload file" },
+      { error: "Failed to upload files" },
       { status: 500 }
     );
   }

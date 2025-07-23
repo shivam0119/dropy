@@ -18,7 +18,7 @@ import {
   ModalContent,
   ModalHeader,
   ModalBody,
-  ModalFooter,     
+  ModalFooter,
 } from "@nextui-org/react";
 import axios from "axios";
 
@@ -33,45 +33,44 @@ export default function FileUploadForm({
   onUploadSuccess,
   currentFolder = null,
 }: FileUploadFormProps) {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Folder creation state
   const [folderModalOpen, setFolderModalOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
+    if (e.target.files) {
+      const selectedFiles = Array.from(e.target.files);
+      const validFiles = selectedFiles.filter((file) => file.size <= 5 * 1024 * 1024);
 
-      // Validate file size (5MB limit)
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        setError("File size exceeds 5MB limit");
-        return;
+      if (validFiles.length !== selectedFiles.length) {
+        setError("Some files exceed 5MB limit");
+      } else {
+        setError(null);
       }
 
-      setFile(selectedFile);
-      setError(null);
+      setFiles((prev) => [...prev, ...validFiles]);
     }
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
+    if (e.dataTransfer.files) {
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      const validFiles = droppedFiles.filter((file) => file.size <= 5 * 1024 * 1024);
 
-      // Validate file size (5MB limit)
-      if (droppedFile.size > 5 * 1024 * 1024) {
-        setError("File size exceeds 5MB limit");
-        return;
+      if (validFiles.length !== droppedFiles.length) {
+        setError("Some files exceed 5MB limit");
+      } else {
+        setError(null);
       }
 
-      setFile(droppedFile);
-      setError(null);
+      setFiles((prev) => [...prev, ...validFiles]);
     }
   };
 
@@ -79,72 +78,60 @@ export default function FileUploadForm({
     e.preventDefault();
   };
 
-  const clearFile = () => {
-    setFile(null);
-    setError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+  const clearFile = (index?: number) => {
+    if (index !== undefined) {
+      setFiles((prev) => prev.filter((_, i) => i !== index));
+    } else {
+      setFiles([]);
     }
+    setError(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleUpload = async () => {
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("userId", userId);
-    if (currentFolder) {
-      formData.append("parentId", currentFolder);
-    }
+    if (files.length === 0) return;
 
     setUploading(true);
     setProgress(0);
     setError(null);
 
-    try {
-      await axios.post("/api/files/upload", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const percentCompleted = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            );
-            setProgress(percentCompleted);
-          }
-        },
-      });
-
-      toast.success(`${file.name} has been uploaded successfully.`,{
-        description: "Upload Successful",
-        
-      });
-
-      // Clear the file after successful upload
-      clearFile();
-
-      // Call the onUploadSuccess callback if provided
-      if (onUploadSuccess) {
-        onUploadSuccess();
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("userId", userId);
+      if (currentFolder) {
+        formData.append("parentId", currentFolder);
       }
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      setError("Failed to upload file. Please try again.");
 
-      toast.error("Upload Failed",{
-        description:"We couldn't upload your file. Please try again.",
-      });
-    } finally {
-      setUploading(false);
+      try {
+        await axios.post("/api/files/upload", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total) {
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
+              setProgress(percentCompleted);
+            }
+          },
+        });
+
+        toast.success(`${file.name} uploaded successfully.`);
+      } catch (err) {
+        console.error("Upload failed", err);
+        toast.error(`Failed to upload ${file.name}`);
+      }
     }
+
+    setUploading(false);
+    setFiles([]);
+    setProgress(0);
+    if (onUploadSuccess) onUploadSuccess();
   };
 
   const handleCreateFolder = async () => {
     if (!folderName.trim()) {
-      toast.error("Invalid Folder Name",{
-        description: "Please enter a valid folder name.",
-      });
+      toast.error("Please enter a valid folder name.");
       return;
     }
 
@@ -157,23 +144,13 @@ export default function FileUploadForm({
         parentId: currentFolder,
       });
 
-      toast.success("Folder Created",{description: `Folder "${folderName}" has been created successfully.`,
-      });
-
-      // Reset folder name and close modal
+      toast.success(`Folder "${folderName}" created successfully.`);
       setFolderName("");
       setFolderModalOpen(false);
-
-      // Call the onUploadSuccess callback to refresh the file list
-      if (onUploadSuccess) {
-        onUploadSuccess();
-      }
+      if (onUploadSuccess) onUploadSuccess();
     } catch (error) {
       console.error("Error creating folder:", error);
-      toast.error("Folder Creation Failed",{
-        description: "We couldn't create the folder. Please try again.",
-        
-      });
+      toast.error("Folder creation failed.");
     } finally {
       setCreatingFolder(false);
     }
@@ -181,7 +158,6 @@ export default function FileUploadForm({
 
   return (
     <div className="space-y-4">
-      {/* Action buttons */}
       <div className="flex gap-2 mb-2">
         <Button
           color="primary"
@@ -199,76 +175,73 @@ export default function FileUploadForm({
           onClick={() => fileInputRef.current?.click()}
           className="flex-1"
         >
-          Add Image
+          Add Image(s)
         </Button>
       </div>
 
-      {/* File drop area */}
       <div
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
           error
             ? "border-danger/30 bg-danger/5"
-            : file
-              ? "border-primary/30 bg-primary/5"
-              : "border-default-300 hover:border-primary/5"
+            : files.length
+            ? "border-primary/30 bg-primary/5"
+            : "border-default-300 hover:border-primary/5"
         }`}
       >
-        {!file ? (
+        <input
+          type="file"
+          multiple
+          accept="image/*"
+          ref={fileInputRef}
+          onChange={handleFileChange}
+          className="hidden"
+        />
+
+        {!files.length ? (
           <div className="space-y-3">
             <FileUp className="h-12 w-12 mx-auto text-primary/70" />
-            <div>
-              <p className="text-default-600">
-                Drag and drop your image here, or{" "}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-primary cursor-pointer font-medium inline bg-transparent border-0 p-0 m-0"
-                >
-                  browse
-                </button>
-              </p>
-              <p className="text-xs text-default-500 mt-1">Images up to 5MB</p>
-            </div>
-            <Input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              className="hidden"
-              accept="image/*"
-            />
+            <p className="text-default-600">
+              Drag and drop images here, or{" "}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="text-primary underline"
+              >
+                browse
+              </button>
+            </p>
+            <p className="text-xs text-default-500">Images up to 5MB</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-primary/10 rounded-md">
-                  <FileUp className="h-5 w-5 text-primary" />
-                </div>
-                <div className="text-left">
-                  <p className="text-sm font-medium truncate max-w-[180px]">
-                    {file.name}
-                  </p>
-                  <p className="text-xs text-default-500">
-                    {file.size < 1024
-                      ? `${file.size} B`
-                      : file.size < 1024 * 1024
-                        ? `${(file.size / 1024).toFixed(1)} KB`
-                        : `${(file.size / (1024 * 1024)).toFixed(1)} MB`}
-                  </p>
-                </div>
-              </div>
-              <Button
-                isIconOnly
-                variant="light"
-                size="sm"
-                onClick={clearFile}
-                className="text-default-500"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+          <div className="space-y-3 text-left">
+            <ul className="space-y-2">
+              {files.map((file, index) => (
+                <li
+                  key={index}
+                  className="flex items-center justify-between gap-2 border p-2 rounded"
+                >
+                  <div>
+                    <p className="text-sm font-medium truncate max-w-[200px]">
+                      {file.name}
+                    </p>
+                    <p className="text-xs text-default-500">
+                      {(file.size / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  </div>
+                  <Button
+                    isIconOnly
+                    variant="light"
+                    size="sm"
+                    onClick={() => clearFile(index)}
+                    className="text-default-500"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
 
             {error && (
               <div className="bg-danger-5 text-danger-700 p-3 rounded-lg flex items-center gap-2">
@@ -282,37 +255,34 @@ export default function FileUploadForm({
                 value={progress}
                 color="primary"
                 size="sm"
-                showValueLabel={true}
-                className="max-w-full"
+                showValueLabel
               />
             )}
 
             <Button
               color="primary"
-              startContent={<Upload className="h-4 w-4" />}
-              endContent={!uploading && <ArrowRight className="h-4 w-4" />}
               onClick={handleUpload}
               isLoading={uploading}
+              startContent={<Upload className="h-4 w-4" />}
+              endContent={!uploading && <ArrowRight className="h-4 w-4" />}
+              isDisabled={!!error || !files.length}
               className="w-full"
-              isDisabled={!!error}
             >
-              {uploading ? `Uploading... ${progress}%` : "Upload Image"}
+              {uploading ? `Uploading... ${progress}%` : "Upload All"}
             </Button>
           </div>
         )}
       </div>
 
-      {/* Upload tips */}
       <div className="bg-default-100/5 p-4 rounded-lg">
         <h4 className="text-sm font-medium mb-2">Tips</h4>
         <ul className="text-xs text-default-600 space-y-1">
           <li>• Images are private and only visible to you</li>
           <li>• Supported formats: JPG, PNG, GIF, WebP</li>
-          <li>• Maximum file size: 5MB</li>
+          <li>• Maximum file size: 5MB per image</li>
         </ul>
       </div>
 
-      {/* Create Folder Modal */}
       <Modal
         isOpen={folderModalOpen}
         onOpenChange={setFolderModalOpen}
@@ -329,18 +299,16 @@ export default function FileUploadForm({
             <span>New Folder</span>
           </ModalHeader>
           <ModalBody>
-            <div className="space-y-4">
-              <p className="text-sm text-default-600">
-                Enter a name for your folder:
-              </p>
-              <Input
-                type="text"
-                placeholder="Folder Name"
-                value={folderName}
-                onChange={(e) => setFolderName(e.target.value)}
-                autoFocus
-              />
-            </div>
+            <p className="text-sm text-default-600">
+              Enter a name for your folder:
+            </p>
+            <Input
+              type="text"
+              placeholder="Folder Name"
+              value={folderName}
+              onChange={(e) => setFolderName(e.target.value)}
+              autoFocus
+            />
           </ModalBody>
           <ModalFooter>
             <Button
@@ -355,7 +323,7 @@ export default function FileUploadForm({
               onClick={handleCreateFolder}
               isLoading={creatingFolder}
               isDisabled={!folderName.trim()}
-              endContent={!creatingFolder && <ArrowRight className="h-4 w-4" />}
+              endContent={<ArrowRight className="h-4 w-4" />}
             >
               Create
             </Button>

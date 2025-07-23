@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Folder, Star, Trash, X, ExternalLink } from "lucide-react";
 import {
   Table,
@@ -14,7 +14,7 @@ import { Divider } from "@heroui/divider";
 import { Tooltip } from "@nextui-org/react";
 import { Card } from "@heroui/card";
 import { toast } from "sonner";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import type { File as FileType } from "@/lib/db/schema";
 import axios from "axios";
 import ConfirmationModal from "@/components/ui/ConfirmationModal";
@@ -41,326 +41,163 @@ export default function FileList({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("all");
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
-  const [folderPath, setFolderPath] = useState<
-    Array<{ id: string; name: string }>
-  >([]);
-
-  // Modal states
+  const [folderPath, setFolderPath] = useState<{ id: string; name: string }[]>(
+    []
+  );
+  const [selectedFile, setSelectedFile] = useState<FileType | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [emptyTrashModalOpen, setEmptyTrashModalOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<FileType | null>(null);
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
-  // Fetch files
   const fetchFiles = async () => {
     setLoading(true);
     try {
       let url = `/api/files?userId=${userId}`;
-      if (currentFolder) {
-        url += `&parentId=${currentFolder}`;
-      }
-
-      const response = await axios.get(url);
-      setFiles(response.data);
-    } catch (error) {
-      console.error("Error fetching files:", error);
-      toast.error("Error Loading Files",{
-        description: "We couldn't load your files. Please try again later.",
-      });
+      if (currentFolder) url += `&parentId=${currentFolder}`;
+      const res = await axios.get(url);
+      setFiles(res.data);
+    } catch {
+      toast.error("We couldn't load your files. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch files when userId, refreshTrigger, or currentFolder changes
   useEffect(() => {
     fetchFiles();
   }, [userId, refreshTrigger, currentFolder]);
 
-  // Filter files based on active tab
-  const filteredFiles = useMemo(() => {
-    switch (activeTab) {
-      case "starred":
-        return files.filter((file) => file.isStarred && !file.isTrash);
-      case "trash":
-        return files.filter((file) => file.isTrash);
-      case "all":
-      default:
-        return files.filter((file) => !file.isTrash);
-    }
+  useEffect(() => {
+    setSelectedFileIds([]);
   }, [files, activeTab]);
 
-  // Count files in trash
-  const trashCount = useMemo(() => {
-    return files.filter((file) => file.isTrash).length;
-  }, [files]);
+  const filteredFiles = useMemo(() => {
+    return files.filter((file) => {
+      if (activeTab === "starred") return file.isStarred && !file.isTrash;
+      if (activeTab === "trash") return file.isTrash;
+      return !file.isTrash;
+    });
+  }, [files, activeTab]);
 
-  // Count starred files
-  const starredCount = useMemo(() => {
-    return files.filter((file) => file.isStarred && !file.isTrash).length;
-  }, [files]);
+  const trashCount = useMemo(() => files.filter((f) => f.isTrash).length, [files]);
+  const starredCount = useMemo(() => files.filter((f) => f.isStarred && !f.isTrash).length, [files]);
 
-  const handleStarFile = async (fileId: string) => {
+  const handleStar = async (id: string) => {
     try {
-      await axios.patch(`/api/files/${fileId}/star`);
+      await axios.patch(`/api/files/${id}/star`);
+      setFiles((prev) =>
+        prev.map((f) => (f.id === id ? { ...f, isStarred: !f.isStarred } : f))
+      );
+    } catch {
+      toast.error("Couldn't update starred status.");
+    }
+  };
 
-      // Update local state
-      setFiles(
-        files.map((file) =>
-          file.id === fileId ? { ...file, isStarred: !file.isStarred } : file
+  const handleTrash = async (id: string) => {
+    try {
+      const res = await axios.patch(`/api/files/${id}/trash`);
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === id ? { ...f, isTrash: res.data.isTrash } : f
         )
       );
-
-      // Show toast
-      const file = files.find((f) => f.id === fileId);
-      toast.success(file?.isStarred ? "Removed from Starred" : "Added to Starred",{
-        description: `"${file?.name}" has been ${
-          file?.isStarred ? "removed from" : "added to"
-        } your starred files`,
-      });
-    } catch (error) {
-      console.error("Error starring file:", error);
-      toast.error("Action Failed",{
-        description: "We couldn't update the star status. Please try again.",
-      });
+    } catch {
+      toast.error("Couldn't move file to trash.");
     }
   };
 
-  const handleTrashFile = async (fileId: string) => {
+  // Soft delete multiple files: Move to trash instead of permanent delete
+  const handleTrashBulk = async () => {
     try {
-      const response = await axios.patch(`/api/files/${fileId}/trash`);
-      const responseData = response.data;
-
-      // Update local state
-      setFiles(
-        files.map((file) =>
-          file.id === fileId ? { ...file, isTrash: !file.isTrash } : file
-        )
+      await Promise.all(
+        selectedFileIds.map(async (id) => {
+          const res = await axios.patch(`/api/files/${id}/trash`);
+          setFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, isTrash: res.data.isTrash } : f))
+          );
+        })
       );
-
-      // Show toast
-      const file = files.find((f) => f.id === fileId);
-      toast.success(responseData.isTrash ? "Moved to Trash" : "Restored from Trash",{
-        description: `"${file?.name}" has been ${
-          responseData.isTrash ? "moved to trash" : "restored"
-        }`,
-      });
-    } catch (error) {
-      console.error("Error trashing file:", error);
-      toast.error("Action Failed",{
-        description: "We couldn't update the star status. Please try again.",
-      });
+      toast.success(`Moved ${selectedFileIds.length} file(s) to trash.`);
+      setSelectedFileIds([]);
+      fetchFiles();
+    } catch {
+      toast.error("Failed to move some files to trash.");
     }
   };
 
-  const handleDeleteFile = async (fileId: string) => {
+  // Permanently delete a single file
+  const handleDelete = async (id: string) => {
     try {
-      // Store file info before deletion for the toast message
-      const fileToDelete = files.find((f) => f.id === fileId);
-      const fileName = fileToDelete?.name || "File";
-
-      // Send delete request
-      const response = await axios.delete(`/api/files/${fileId}/delete`);
-
-      if (response.data.success) {
-        // Remove file from local state
-        setFiles(files.filter((file) => file.id !== fileId));
-
-        // Show success toast
-        toast.success("File Permanently Deleted",{
-          description: `"${fileName}" has been permanently removed`,
-        });
-
-        // Close modal if it was open
-        setDeleteModalOpen(false);
-      } else {
-        throw new Error(response.data.error || "Failed to delete file");
-      }
-    } catch (error) {
-      console.error("Error deleting file:", error);
-      toast.error("Deletion Failed",{
-        description: "We couldn't delete the file. Please try again later.",
-      });
+      await axios.delete(`/api/files/${id}/delete`);
+      setFiles((prev) => prev.filter((f) => f.id !== id));
+      toast.success("File deleted.");
+    } catch {
+      toast.error("Couldn't delete file.");
     }
   };
 
-  const handleEmptyTrash = async () => {
+  // Permanently delete multiple files
+  const handleDeleteBulk = async () => {
     try {
-      await axios.delete(`/api/files/empty-trash`);
-
-      // Remove all trashed files from local state
-      setFiles(files.filter((file) => !file.isTrash));
-
-      // Show toast
-      toast.success("Trash Emptied",{
-        description: `All ${trashCount} items have been permanently deleted`,
-      });
-
-      // Close modal
-      setEmptyTrashModalOpen(false);
-    } catch (error) {
-      console.error("Error emptying trash:", error);
-      toast.error("Action Failed",{
-        description: "We couldn't empty the trash. Please try again later.",
-      });
+      await Promise.all(
+        selectedFileIds.map(async (id) => {
+          await axios.delete(`/api/files/${id}/delete`);
+          setFiles((prev) => prev.filter((f) => f.id !== id));
+        })
+      );
+      toast.success(`Deleted ${selectedFileIds.length} file(s) permanently.`);
+      setSelectedFileIds([]);
+      fetchFiles();
+    } catch {
+      toast.error("Failed to delete some files.");
     }
   };
 
-  // Add this function to handle file downloads
-  const handleDownloadFile = async (file: FileType) => {
+  const handleDownload = async (file: FileType) => {
     try {
-      // Show loading toast
-      toast.success("Preparing Download",{
-        description: `Getting "${file.name}" ready for download...`,
-      });
-
-      // For images, we can use the ImageKit URL directly with optimized settings
-      if (file.type.startsWith("image/")) {
-        // Create a download-optimized URL with ImageKit
-        // Using high quality and original dimensions for downloads
-        const downloadUrl = `${process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT}/tr:q-100,orig-true/${file.path}`;
-
-        // Fetch the image first to ensure it's available
-        const response = await fetch(downloadUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to download image: ${response.statusText}`);
-        }
-
-        // Get the blob data
-        const blob = await response.blob();
-
-        // Create a download link
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = blobUrl;
-        link.download = file.name;
-        document.body.appendChild(link);
-
-        // Remove loading toast and show success toast
-        toast.success("Download Ready",{
-          description: `"${file.name}" is ready to download.`,
-        });
-
-        // Trigger download
-        link.click();
-
-        // Clean up
-        document.body.removeChild(link);
-        URL.revokeObjectURL(blobUrl);
-      } else {
-        // For other file types, use the fileUrl directly
-        const response = await fetch(file.fileUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to download file: ${response.statusText}`);
-        }
-
-        // Get the blob data
-        const blob = await response.blob();
-
-        // Create a download link
-        const blobUrl = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = blobUrl;
-        link.download = file.name;
-        document.body.appendChild(link);
-
-        // Remove loading toast and show success toast
-        toast.success("Download Ready",{
-          description: `"${file.name}" is ready to download.`,
-        
-        });
-
-        // Trigger download
-        link.click();
-
-        // Clean up
-        document.body.removeChild(link);
-        URL.revokeObjectURL(blobUrl);
-      }
-    } catch (error) {
-      console.error("Error downloading file:", error);
-      toast("Download Failed",{
-        description: "We couldn't download the file. Please try again later.",
-      });
+      toast.success("Preparing download...");
+      const res = await fetch(file.fileUrl);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Download started.");
+    } catch {
+      toast.error("Download failed.");
     }
   };
 
-  // Function to open image in a new tab with optimized view
-  const openImageViewer = (file: FileType) => {
-    if (file.type.startsWith("image/")) {
-      // Create an optimized URL with ImageKit transformations for viewing
-      // Using higher quality and responsive sizing for better viewing experience
-      const optimizedUrl = `${process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT}/tr:q-90,w-1600,h-1200,fo-auto/${file.path}`;
-      window.open(optimizedUrl, "_blank");
+  const handleDownloadBulk = async () => {
+    for (let file of files.filter((f) => selectedFileIds.includes(f.id))) {
+      await handleDownload(file);
     }
+    setSelectedFileIds([]);
   };
 
-  // Navigate to a folder
-  const navigateToFolder = (folderId: string, folderName: string) => {
-    setCurrentFolder(folderId);
-    setFolderPath([...folderPath, { id: folderId, name: folderName }]);
-
-    // Notify parent component about folder change
-    if (onFolderChange) {
-      onFolderChange(folderId);
-    }
+  const openFolder = (id: string, name: string) => {
+    setCurrentFolder(id);
+    setFolderPath((prev) => [...prev, { id, name }]);
+    onFolderChange?.(id);
   };
 
-  // Navigate back to parent folder
-  const navigateUp = () => {
-    if (folderPath.length > 0) {
-      const newPath = [...folderPath];
-      newPath.pop();
-      setFolderPath(newPath);
-      const newFolderId =
-        newPath.length > 0 ? newPath[newPath.length - 1].id : null;
-      setCurrentFolder(newFolderId);
-
-      // Notify parent component about folder change
-      if (onFolderChange) {
-        onFolderChange(newFolderId);
-      }
-    }
+  const goUp = () => {
+    const prev = [...folderPath];
+    prev.pop();
+    const newId = prev.length ? prev[prev.length - 1].id : null;
+    setFolderPath(prev);
+    setCurrentFolder(newId);
+    onFolderChange?.(newId);
   };
 
-  // Navigate to specific folder in path
-  const navigateToPathFolder = (index: number) => {
-    if (index < 0) {
-      setCurrentFolder(null);
-      setFolderPath([]);
-
-      // Notify parent component about folder change
-      if (onFolderChange) {
-        onFolderChange(null);
-      }
-    } else {
-      const newPath = folderPath.slice(0, index + 1);
-      setFolderPath(newPath);
-      const newFolderId = newPath[newPath.length - 1].id;
-      setCurrentFolder(newFolderId);
-
-      // Notify parent component about folder change
-      if (onFolderChange) {
-        onFolderChange(newFolderId);
-      }
-    }
-  };
-
-  // Handle file or folder click
-  const handleItemClick = (file: FileType) => {
-    if (file.isFolder) {
-      navigateToFolder(file.id, file.name);
-    } else if (file.type.startsWith("image/")) {
-      openImageViewer(file);
-    }
-  };
-
-  if (loading) {
-    return <FileLoadingState />;
-  }
+  if (loading) return <FileLoadingState />;
 
   return (
     <div className="space-y-6">
-      {/* Tabs for filtering files */}
       <FileTabs
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -369,16 +206,20 @@ export default function FileList({
         trashCount={trashCount}
       />
 
-      {/* Folder navigation */}
       {activeTab === "all" && (
         <FolderNavigation
           folderPath={folderPath}
-          navigateUp={navigateUp}
-          navigateToPathFolder={navigateToPathFolder}
+          navigateUp={goUp}
+          navigateToPathFolder={(i) => {
+            const newPath = folderPath.slice(0, i + 1);
+            setFolderPath(newPath);
+            const newId = newPath.length ? newPath[newPath.length - 1].id : null;
+            setCurrentFolder(newId);
+            onFolderChange?.(newId);
+          }}
         />
       )}
 
-      {/* Action buttons */}
       <FileActionButtons
         activeTab={activeTab}
         trashCount={trashCount}
@@ -387,148 +228,179 @@ export default function FileList({
         onEmptyTrash={() => setEmptyTrashModalOpen(true)}
       />
 
-      <Divider className="my-4" />
+      {selectedFileIds.length > 0 && (
+        <div className="flex items-center justify-between mb-4">
+          <p>{selectedFileIds.length} selected</p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleDownloadBulk}
+              className="text-default-500 mt-2 max-w-md mx-auto"
+              type="button"
+            >
+              Download
+            </button>
+            {activeTab === "trash" ? (
+              <button
+               color="danger"
+           
+         
+                onClick={() => setDeleteModalOpen(true)}
+                className="text-default-500 mt-2 max-w-md mx-auto"
+                type="button"
+              >
+                Delete
+              </button>
+            ) : (
+              <button
+               color="danger"
+         
+          
+                onClick={() => setDeleteModalOpen(true)}
+                className="text-default-500 mt-2 max-w-md mx-auto"
+                type="button"
+              >
+                Move to Trash
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
-      {/* Files table */}
+      <Divider />
+
       {filteredFiles.length === 0 ? (
         <FileEmptyState activeTab={activeTab} />
       ) : (
-        <Card
-          shadow="sm"
-          className="border border-default-200 bg-default-50 overflow-hidden"
-        >
-          <div className="overflow-x-auto">
-            <Table
-              aria-label="Files table"
-              isStriped
-              color="default"
-              selectionMode="none"
-              classNames={{
-                base: "min-w-full",
-                th: "bg-default-100 text-default-800 font-medium text-sm",
-                td: "py-4",
-              }}
-            >
-              <TableHeader>
-                <TableColumn>Name</TableColumn>
-                <TableColumn className="hidden sm:table-cell">Type</TableColumn>
-                <TableColumn className="hidden md:table-cell">Size</TableColumn>
-                <TableColumn className="hidden sm:table-cell">
-                  Added
-                </TableColumn>
-                <TableColumn width={240}>Actions</TableColumn>
-              </TableHeader>
-              <TableBody>
-                {filteredFiles.map((file) => (
-                  <TableRow
-                    key={file.id}
-                    className={`hover:bg-default-100 transition-colors ${
-                      file.isFolder || file.type.startsWith("image/")
-                        ? "cursor-pointer"
-                        : ""
-                    }`}
-                    onClick={() => handleItemClick(file)}
-                  >
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <FileIcon file={file} />
-                        <div>
-                          <div className="font-medium flex items-center gap-2 text-default-800">
-                            <span className="truncate max-w-[150px] sm:max-w-[200px] md:max-w-[300px]">
-                              {file.name}
-                            </span>
-                            {file.isStarred && (
-                              <Tooltip content="Starred">
-                                <Star
-                                  className="h-4 w-4 text-yellow-400"
-                                  fill="currentColor"
-                                />
-                              </Tooltip>
-                            )}
-                            {file.isFolder && (
-                              <Tooltip content="Folder">
-                                <Folder className="h-3 w-3 text-default-400" />
-                              </Tooltip>
-                            )}
-                            {file.type.startsWith("image/") && (
-                              <Tooltip content="Click to view image">
-                                <ExternalLink className="h-3 w-3 text-default-400" />
-                              </Tooltip>
-                            )}
-                          </div>
-                          <div className="text-xs text-default-500 sm:hidden">
-                            {formatDistanceToNow(new Date(file.createdAt), {
-                              addSuffix: true,
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <div className="text-xs text-default-500">
-                        {file.isFolder ? "Folder" : file.type}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <div className="text-default-700">
-                        {file.isFolder
-                          ? "-"
-                          : file.size < 1024
-                            ? `${file.size} B`
-                            : file.size < 1024 * 1024
-                              ? `${(file.size / 1024).toFixed(1)} KB`
-                              : `${(file.size / (1024 * 1024)).toFixed(1)} MB`}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <div>
-                        <div className="text-default-700">
-                          {formatDistanceToNow(new Date(file.createdAt), {
-                            addSuffix: true,
-                          })}
-                        </div>
-                        <div className="text-xs text-default-500 mt-1">
-                          {format(new Date(file.createdAt), "MMMM d, yyyy")}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <FileActions
-                        file={file}
-                        onStar={handleStarFile}
-                        onTrash={handleTrashFile}
-                        onDelete={(file) => {
-                          setSelectedFile(file);
-                          setDeleteModalOpen(true);
-                        }}
-                        onDownload={handleDownloadFile}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        <Card shadow="sm" className="overflow-x-auto border">
+          <Table isStriped>
+            <TableHeader>
+              <TableColumn>
+                <input
+                  type="checkbox"
+                  checked={
+                    filteredFiles.length > 0 &&
+                    selectedFileIds.length === filteredFiles.length
+                  }
+                  onChange={(e) => {
+                    if (e.target.checked)
+                      setSelectedFileIds(filteredFiles.map((f) => f.id));
+                    else setSelectedFileIds([]);
+                  }}
+                />
+              </TableColumn>
+              <TableColumn>Name</TableColumn>
+              <TableColumn className="hidden sm:table-cell">Type</TableColumn>
+              <TableColumn className="hidden md:table-cell">Size</TableColumn>
+              <TableColumn className="hidden sm:table-cell">Added</TableColumn>
+              <TableColumn width={240}>Actions</TableColumn>
+            </TableHeader>
+            <TableBody>
+              {filteredFiles.map((file) => (
+                <TableRow
+                  key={file.id}
+                  onClick={() => file.isFolder && openFolder(file.id, file.name)}
+                  className="cursor-pointer"
+                >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedFileIds.includes(file.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelectedFileIds((prev) =>
+                          checked
+                            ? [...prev, file.id]
+                            : prev.filter((id) => id !== file.id)
+                        );
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <FileIcon file={file} />
+                      <span className="truncate max-w-[200px]">{file.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell">
+                    {file.isFolder ? "Folder" : file.type}
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell">
+                    {file.isFolder ? "-" : formatFileSize(file.size)}
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell">
+                    {formatDistanceToNow(new Date(file.createdAt), {
+                      addSuffix: true,
+                    })}
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <FileActions
+                      file={file}
+                      onDownload={() => handleDownload(file)}
+                      onStar={() => handleStar(file.id)}
+                      onTrash={() => handleTrash(file.id)}
+                      onDelete={() => {
+                        setSelectedFile(file);
+                        setDeleteModalOpen(true);
+                      }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </Card>
       )}
 
-      {/* Delete confirmation modal */}
+      {/* Delete / Trash confirmation modal */}
       <ConfirmationModal
         isOpen={deleteModalOpen}
         onOpenChange={setDeleteModalOpen}
-        title="Confirm Permanent Deletion"
-        description={`Are you sure you want to permanently delete this file?`}
+        title={
+          activeTab === "trash"
+            ? "Confirm Permanent Deletion"
+            : "Confirm Move to Trash"
+        }
+        description={
+          activeTab === "trash"
+            ? `Are you sure you want to permanently delete ${
+                selectedFileIds.length > 1
+                  ? `${selectedFileIds.length} files`
+                  : `"${selectedFile?.name}"`
+              }? This action cannot be undone.`
+            : `Are you sure you want to move ${
+                selectedFileIds.length > 1
+                  ? `${selectedFileIds.length} files`
+                  : `"${selectedFile?.name}"`
+              } to trash?`
+        }
         icon={X}
         iconColor="text-danger"
-        confirmText="Delete Permanently"
+        confirmText={activeTab === "trash" ? "Delete Permanently" : "Move to Trash"}
         confirmColor="danger"
-        onConfirm={() => {
-          if (selectedFile) {
-            handleDeleteFile(selectedFile.id);
+        onConfirm={async () => {
+          if (selectedFileIds.length > 0) {
+            if (activeTab === "trash") {
+              await handleDeleteBulk();
+            } else {
+              await handleTrashBulk();
+            }
+          } else if (selectedFile) {
+            if (activeTab === "trash") {
+              await handleDelete(selectedFile.id);
+            } else {
+              await handleTrash(selectedFile.id);
+            }
           }
+          setSelectedFileIds([]);
+          setDeleteModalOpen(false);
+          fetchFiles();
         }}
-        isDangerous={true}
-        warningMessage={`You are about to permanently delete "${selectedFile?.name}". This file will be permanently removed from your account and cannot be recovered.`}
+        isDangerous
+        warningMessage={
+          activeTab === "trash"
+            ? "This action cannot be undone."
+            : undefined
+        }
       />
 
       {/* Empty trash confirmation modal */}
@@ -536,15 +408,37 @@ export default function FileList({
         isOpen={emptyTrashModalOpen}
         onOpenChange={setEmptyTrashModalOpen}
         title="Empty Trash"
-        description={`Are you sure you want to empty the trash?`}
+        description={`Are you sure you want to permanently delete all ${trashCount} items in the trash?`}
         icon={Trash}
         iconColor="text-danger"
         confirmText="Empty Trash"
         confirmColor="danger"
-        onConfirm={handleEmptyTrash}
-        isDangerous={true}
-        warningMessage={`You are about to permanently delete all ${trashCount} items in your trash. These files will be permanently removed from your account and cannot be recovered.`}
+        onConfirm={async () => {
+          try {
+            // Permanently delete all trashed files
+            const trashedFileIds = files.filter((f) => f.isTrash).map((f) => f.id);
+            await Promise.all(
+              trashedFileIds.map(async (id) => {
+                await axios.delete(`/api/files/${id}/delete`);
+              })
+            );
+            toast.success("Trash emptied.");
+            setEmptyTrashModalOpen(false);
+            fetchFiles();
+          } catch {
+            toast.error("Failed to empty trash.");
+          }
+        }}
+        isDangerous
+        warningMessage="This action cannot be undone."
       />
     </div>
   );
+}
+
+// Utility to format file sizes
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
